@@ -39,6 +39,13 @@ function inferKind(mimeType = "") {
   return "file";
 }
 
+function normalizeUploadFilename(filename = "") {
+  const fixed = Buffer.from(filename, "latin1").toString("utf8");
+  const looksMojibake = /[ÃÂÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßà-ÿ]/.test(filename);
+  const fixedLooksReadable = !fixed.includes("�") && /[\u3400-\u9fff]/.test(fixed);
+  return looksMojibake && fixedLooksReadable ? fixed : filename;
+}
+
 function missingTkHubKey() {
   return !process.env.TKHUB_API_KEY || process.env.TKHUB_API_KEY.includes("请在这里替换");
 }
@@ -113,7 +120,7 @@ function parseImageHostResponse(data) {
 async function uploadToImageHost(file) {
   const form = new FormData();
   const blob = new Blob([file.buffer], { type: file.mimetype || "application/octet-stream" });
-  form.append("file", blob, file.originalname);
+  form.append("file", blob, normalizeUploadFilename(file.originalname));
 
   const response = await fetch(imageHostUploadUrl, {
     method: "POST",
@@ -204,7 +211,7 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
       key: asset.src,
       url: asset.url,
       src: asset.src,
-      name: req.file.originalname,
+      name: normalizeUploadFilename(req.file.originalname),
       size: req.file.size,
       mimeType: req.file.mimetype,
       kind: inferKind(req.file.mimetype),
