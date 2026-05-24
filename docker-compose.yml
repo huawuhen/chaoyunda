@@ -1,0 +1,9 @@
+services:
+  app:
+    build: .
+    container_name: chaoyunda
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-4173}:${PORT:-4173}"

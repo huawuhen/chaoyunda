@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Seedance 2.0 Video Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <div class="brand-mark">
+              <img src="./assets/logo.png" alt="红手印 Redith" />
+            </div>
+          </div>
+          <div class="status-pill" id="connectionState">未提交</div>
+        </header>
+
+        <div class="layout-grid">
+          <form class="panel form-panel" id="generationForm">
+            <div class="panel-heading">
+              <div>
+                <h2>生成参数</h2>
+                <p id="endpointHint" class="visually-hidden">提交到 POST /v1/video/generations</p>
+              </div>
+              <div class="heading-controls">
+                <select id="provider">
+                  <option value="tkhub">TkHub Seedance 2.0</option>
+                  <option value="muapi-i2v">MuAPI| Seedance2 I2V</option>
+                  <option value="muapi-t2v">MuAPI| Seedance2 T2V</option>
+                </select>
+                <select id="preset">
+                  <option value="text">纯文本</option>
+                  <option value="imageText">案例 A 图 + 文</option>
+                  <option value="imageVideo">案例 B 图 + 视频 + 文</option>
+                  <option value="imageAudio">案例 C 图 + 音频</option>
+                  <option value="full">案例 D 完整版</option>
+                  <option value="firstLast">案例 E 首尾帧</option>
+                  <option value="muapiI2v">MuAPI 图生视频</option>
+                  <option value="muapiT2v">MuAPI 文生视频</option>
+                </select>
+              </div>
+            </div>
+
+            <label class="field block">
+              <span>提示词</span>
+              <textarea id="prompt" rows="5" required></textarea>
+            </label>
+            <div class="asset-tray" id="assetTray">
+              <span>已上传素材</span>
+              <div id="uploadedAssets" class="asset-list">
+                <em>暂无素材</em>
+              </div>
+            </div>
+
+            <div class="split">
+              <label class="field">
+                <span>时长</span>
+                <input id="duration" type="number" min="1" max="10" step="1" value="4" />
+              </label>
+              <label class="field">
+                <span>分辨率</span>
+                <select id="resolution">
+                  <option value="720p">720p</option>
+                  <option value="480p">480p</option>
+                  <option value="1080p">1080p</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>画面比例</span>
+                <select id="ratio">
+                  <option value="">默认</option>
+                  <option value="16:9">16:9</option>
+                  <option value="9:16">9:16</option>
+                  <option value="1:1">1:1</option>
+                  <option value="4:3">4:3</option>
+                  <option value="3:4">3:4</option>
+                  <option value="21:9">21:9</option>
+                </select>
+                <small class="field-note" id="ratioNote">普通参考模式可能被接口忽略；首尾帧模式支持度更高。</small>
+              </label>
+            </div>
+
+            <div class="mode-tabs" id="modeTabs" role="tablist" aria-label="输入模式">
+              <button class="tab is-active" type="button" data-mode="regular">常规参考</button>
+              <button class="tab" type="button" data-mode="first-last">首尾帧</button>
+            </div>
+
+            <section class="mode-section" id="regularMode">
+              <div class="field block" id="imageBlock">
+                <span id="imageBlockLabel">参考图片</span>
+                <div id="imagesList" class="url-list"></div>
+                <button class="inline-button" type="button" data-add="imagesList">添加图片</button>
+              </div>
+
+              <div class="field block hidden" id="muapiLastImageBlock">
+                <span>末帧图片（可选）</span>
+                <div id="muapiLastImageList" class="url-list"></div>
+                <button class="inline-button" type="button" data-add="muapiLastImageList">添加末帧图片</button>
+              </div>
+
+              <div class="field block" id="videoBlock">
+                <span>参考视频（运动参考）</span>
+                <div id="videosList" class="url-list"></div>
+                <button class="inline-button" type="button" data-add="videosList">添加视频</button>
+              </div>
+
+              <div class="field block" id="audioBlock">
+                <span>参考音频</span>
+                <div id="audiosList" class="url-list"></div>
+                <button class="inline-button" type="button" data-add="audiosList">添加音频</button>
+              </div>
+            </section>
+
+            <section class="mode-section hidden" id="firstLastMode">
+              <label class="field block">
+                <span>首帧图片 URL</span>
+                <input id="firstImage" type="url" placeholder="https://example.com/first-frame.jpg" />
+              </label>
+              <label class="field block">
+                <span>末帧图片 URL</span>
+                <input id="lastImage" type="url" placeholder="https://example.com/last-frame.jpg" />
+              </label>
+            </section>
+
+            <div class="options-row">
+              <label class="check-field">
+                <input id="generateAudio" type="checkbox" />
+                <span id="generateAudioLabel">生成或保留音频 metadata.generate_audio</span>
+              </label>
+              <label class="check-field hidden" id="cameraFixedField">
+                <input id="cameraFixed" type="checkbox" />
+                <span>固定镜头 camera_fixed</span>
+              </label>
+              <label class="check-field">
+                <input id="autoPoll" type="checkbox" checked />
+                <span>提交后自动查询状态</span>
+              </label>
+            </div>
+
+            <div class="actions">
+              <button class="primary-button" type="submit">提交生成任务</button>
+              <button class="secondary-button" id="copyCurl" type="button">复制 curl</button>
+              <button class="secondary-button" id="resetForm" type="button">重置</button>
+            </div>
+          </form>
+
+          <aside class="panel preview-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>结果视频预览</h2>
+                <p>生成完成后会在这里播放</p>
+              </div>
+              <span class="mini-badge">VIDEO</span>
+            </div>
+            <div class="video-preview-box">
+              <video id="previewVideo" controls playsinline></video>
+              <div id="previewEmpty" class="preview-empty">暂无生成视频</div>
+            </div>
+            <div class="preview-actions">
+              <a id="previewOpenLink" href="#" target="_blank" rel="noreferrer">打开视频</a>
+              <a id="previewDownloadLink" href="#">下载视频</a>
+            </div>
+            <pre id="payloadPreview" class="visually-hidden"></pre>
+          </aside>
+        </div>
+
+        <section class="panel result-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>任务查询</h2>
+              <p>GET /v1/video/generations/{task_id}</p>
+            </div>
+          </div>
+
+          <div class="result-grid">
+            <div class="result-card">
+              <span>任务状态</span>
+              <strong id="taskStatus">-</strong>
+              <div class="progress-track">
+                <div id="progressBar" class="progress-bar"></div>
+              </div>
+              <p id="progressText">等待任务提交</p>
+              <p id="actualRatio">实际比例：-</p>
+            </div>
+            <div class="query-line">
+              <input id="taskId" placeholder="task_xxx" />
+              <button class="secondary-button" id="queryTask" type="button">查询状态</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel history-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>任务结果列表</h2>
+              <p>本地保留最近 50 条生成记录</p>
+            </div>
+            <button class="secondary-button" id="clearHistory" type="button">清空记录</button>
+          </div>
+          <div class="history-table-wrap">
+            <table class="history-table">
+              <thead>
+                <tr>
+                  <th>请求时间</th>
+                  <th>任务 ID</th>
+                  <th>比例</th>
+                  <th>时长</th>
+                  <th>分辨率</th>
+                  <th>状态</th>
+                  <th>视频地址</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="historyBody">
+                <tr>
+                  <td colspan="8" class="empty-history">暂无生成记录</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <template id="urlRowTemplate">
+      <div class="url-row">
+        <input class="source-value" type="url" placeholder="https://..." />
+        <label class="file-picker">
+          <input class="file-input" type="file" />
+          <span>上传</span>
+        </label>
+        <button class="remove-row" type="button" aria-label="移除文件或 URL">移除</button>
+        <small class="file-meta"></small>
+      </div>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "redith-seedance-console",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "multer": "^2.1.1"
+  }
+}
