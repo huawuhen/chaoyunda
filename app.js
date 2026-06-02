@@ -489,7 +489,7 @@ function setProvider(provider) {
   els.generateAudioLabel.textContent = isMuapi ? "生成音频 generate_audio" : "生成或保留音频 metadata.generate_audio";
   els.ratioNote.textContent = isMuapi ? "MuAPI 支持 16:9、9:16、1:1、3:4、4:3、21:9。" : "普通参考模式可能被接口忽略；首尾帧模式支持度更高。";
   els.duration.min = isMuapi ? "4" : "1";
-  els.duration.max = isMuapi ? "12" : "10";
+  els.duration.max = isMuapi ? "12" : "15";
   updatePreview();
 }
 
@@ -575,7 +575,7 @@ function validatePayload(payload) {
   if (payload.provider === "muapi-i2v" && !payload.image_url) return "MuAPI 图生视频需要至少提供一张输入图片。";
   if ((payload.provider === "muapi-i2v" || payload.provider === "muapi-t2v") && (payload.duration < 4 || payload.duration > 12)) return "MuAPI 时长需要在 4-12 秒之间。";
   if (payload.provider === "muapi-i2v" || payload.provider === "muapi-t2v") return "";
-  if (!payload.duration || payload.duration < 1 || payload.duration > 10) return "时长需要在 1-10 秒之间。";
+  if (!payload.duration || payload.duration < 1 || payload.duration > 15) return "时长需要在 1-15 秒之间。";
   if (payload.metadata?.frame_mode === "first-last") {
     if (!payload.metadata.first_image || !payload.metadata.last_image) return "首尾帧模式需要同时填写首帧和末帧图片 URL。";
   }

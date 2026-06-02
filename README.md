@@ -1,13 +1,13 @@
 # Chaoyunda
 
-Redith Seedance Console is a lightweight Node.js + Express web app for video generation workflows. It serves the frontend files directly and proxies requests to TkHub, MuAPI, and an image hosting service.
+Redith Seedance Console is a lightweight Node.js + Express web app for video generation workflows. It serves the frontend files directly and proxies requests to TkHub, MuAPI, and S3-compatible object storage.
 
 ## Features
 
 - Static web console served by Express
 - Video generation API proxy for TkHub
 - Text-to-video and image-to-video API proxy for MuAPI
-- Upload endpoint for image/video assets
+- Upload endpoint for image/video/audio assets backed by S3-compatible storage
 - Download proxy for generated videos
 - Docker Compose deployment support
 
@@ -34,8 +34,12 @@ Available variables:
 | `TKHUB_API_KEY` | TkHub API key | Required |
 | `MUAPI_BASE_URL` | MuAPI API base URL | `https://api.muapi.ai/api/v1` |
 | `MUAPI_API_KEY` | MuAPI API key | Required |
-| `IMAGE_HOST_BASE_URL` | Public image host base URL | Required |
-| `IMAGE_HOST_UPLOAD_URL` | Image host upload endpoint | Required |
+| `S3_ENDPOINT` | S3-compatible endpoint | Required |
+| `S3_BUCKET` | Bucket for uploaded image/video/audio assets | `redith-assets` |
+| `S3_REGION` | S3 signing region | `us-east-1` |
+| `S3_ACCESS_KEY_ID` | S3 access key ID | Required |
+| `S3_SECRET_ACCESS_KEY` | S3 secret access key | Required |
+| `S3_SIGNED_URL_EXPIRES_SECONDS` | Expiration for generated material URLs, max 7 days | `604800` |
 | `MAX_UPLOAD_MB` | Max upload size in MB | `200` |
 
 Do not commit `.env`. It is ignored by git.

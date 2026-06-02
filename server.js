@@ -1,6 +1,9 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { CreateBucketCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import dotenv from "dotenv";
 import express from "express";
 import multer from "multer";
@@ -14,14 +17,32 @@ const port = Number(process.env.PORT || 4173);
 const maxUploadMb = Number(process.env.MAX_UPLOAD_MB || 200);
 const tkhubBaseUrl = (process.env.TKHUB_API_BASE_URL || "https://api.tkhub.ai").replace(/\/$/, "");
 const muapiBaseUrl = (process.env.MUAPI_BASE_URL || "https://api.muapi.ai/api/v1").replace(/\/$/, "");
-const imageHostBaseUrl = (process.env.IMAGE_HOST_BASE_URL || "https://tuchuang.huawuhen.online").replace(/\/$/, "");
-const imageHostUploadUrl = process.env.IMAGE_HOST_UPLOAD_URL || `${imageHostBaseUrl}/upload`;
+const s3Endpoint = (process.env.S3_ENDPOINT || "").replace(/\/$/, "");
+const s3Bucket = process.env.S3_BUCKET || "redith-assets";
+const s3Region = process.env.S3_REGION || "us-east-1";
+const s3AccessKeyId = process.env.S3_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID || process.env.access_key_id;
+const s3SecretAccessKey =
+  process.env.S3_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY || process.env.secret_access_key;
+const signedUrlExpiresIn = Math.min(Number(process.env.S3_SIGNED_URL_EXPIRES_SECONDS || 604800), 604800);
 
-const requiredEnv = ["TKHUB_API_KEY", "MUAPI_API_KEY", "IMAGE_HOST_BASE_URL", "IMAGE_HOST_UPLOAD_URL"];
+const requiredEnv = ["TKHUB_API_KEY", "MUAPI_API_KEY", "S3_ENDPOINT"];
 const missingEnv = requiredEnv.filter((key) => !process.env[key]);
+if (!s3AccessKeyId) missingEnv.push("S3_ACCESS_KEY_ID");
+if (!s3SecretAccessKey) missingEnv.push("S3_SECRET_ACCESS_KEY");
 if (missingEnv.length) {
   throw new Error(`Missing required environment variables: ${missingEnv.join(", ")}`);
 }
+
+const s3Client = new S3Client({
+  endpoint: s3Endpoint,
+  region: s3Region,
+  forcePathStyle: true,
+  credentials: {
+    accessKeyId: s3AccessKeyId,
+    secretAccessKey: s3SecretAccessKey,
+  },
+});
+let ensureBucketPromise;
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -44,6 +65,39 @@ function normalizeUploadFilename(filename = "") {
   const looksMojibake = /[ÃÂÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßà-ÿ]/.test(filename);
   const fixedLooksReadable = !fixed.includes("�") && /[\u3400-\u9fff]/.test(fixed);
   return looksMojibake && fixedLooksReadable ? fixed : filename;
+}
+
+function sanitizeObjectFilename(filename = "") {
+  return normalizeUploadFilename(filename)
+    .replace(/[\\/#?%*:|"<>]/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 120) || "upload.bin";
+}
+
+function buildObjectKey(file) {
+  const date = new Date().toISOString().slice(0, 10);
+  const kind = inferKind(file.mimetype);
+  return `uploads/${kind}/${date}/${Date.now()}-${randomUUID()}-${sanitizeObjectFilename(file.originalname)}`;
+}
+
+function formatUploadError(error) {
+  if (error?.code === "LIMIT_FILE_SIZE") {
+    return `文件超过本地上传限制，请压缩后再试，或在 .env 中调大 MAX_UPLOAD_MB。当前限制：${maxUploadMb}MB。`;
+  }
+
+  const message = error?.message || "";
+  const status = error?.$metadata?.httpStatusCode || error?.$response?.statusCode;
+  const storageReturnedHtml = /Expected closing tag|Deserialization error|<html|<body|<hr/i.test(message);
+  if (storageReturnedHtml) {
+    const statusText = status ? `HTTP ${status}` : "非标准错误响应";
+    return `S3 存储端点返回了 ${statusText}，不是标准 S3 XML 错误。通常是 S3 服务或前置反向代理限制了上传体积，请调高存储服务/网关的最大上传大小，或压缩文件后再试。`;
+  }
+
+  if (status === 413) {
+    return "S3 存储端点拒绝了这个文件：文件体积超过存储服务或反向代理允许的最大上传大小。";
+  }
+
+  return message || "S3 上传失败。";
 }
 
 function missingTkHubKey() {
@@ -102,41 +156,45 @@ function stripProviderField(body) {
   return payload;
 }
 
-function toAbsoluteAssetUrl(src) {
-  if (!src) return "";
-  return new URL(src, imageHostBaseUrl).toString();
+async function ensureS3Bucket() {
+  if (!ensureBucketPromise) {
+    ensureBucketPromise = (async () => {
+      try {
+        await s3Client.send(new HeadBucketCommand({ Bucket: s3Bucket }));
+      } catch (error) {
+        const status = error?.$metadata?.httpStatusCode;
+        if (status !== 404 && error?.name !== "NotFound" && error?.name !== "NoSuchBucket") {
+          throw error;
+        }
+        await s3Client.send(new CreateBucketCommand({ Bucket: s3Bucket }));
+      }
+    })();
+  }
+  return ensureBucketPromise;
 }
 
-function parseImageHostResponse(data) {
-  const first = Array.isArray(data) ? data[0] : data;
-  const src = first?.src || first?.url || first?.path;
-  const url = toAbsoluteAssetUrl(src);
-  if (!url) {
-    throw new Error("图床响应中没有找到 src/url/path 字段。");
-  }
-  return { src, url };
-}
-
-async function uploadToImageHost(file) {
-  const form = new FormData();
-  const blob = new Blob([file.buffer], { type: file.mimetype || "application/octet-stream" });
-  form.append("file", blob, normalizeUploadFilename(file.originalname));
-
-  const response = await fetch(imageHostUploadUrl, {
-    method: "POST",
-    body: form,
-  });
-  const text = await response.text();
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(`图床响应不是 JSON：${text.slice(0, 160)}`);
-  }
-  if (!response.ok) {
-    throw new Error(data?.error || data?.message || `图床上传失败 ${response.status}`);
-  }
-  return parseImageHostResponse(data);
+async function uploadToS3(file) {
+  await ensureS3Bucket();
+  const key = buildObjectKey(file);
+  const contentType = file.mimetype || "application/octet-stream";
+  await s3Client.send(
+    new PutObjectCommand({
+      Bucket: s3Bucket,
+      Key: key,
+      Body: file.buffer,
+      ContentType: contentType,
+    }),
+  );
+  const url = await getSignedUrl(
+    s3Client,
+    new GetObjectCommand({
+      Bucket: s3Bucket,
+      Key: key,
+      ResponseContentType: contentType,
+    }),
+    { expiresIn: signedUrlExpiresIn },
+  );
+  return { key, url };
 }
 
 app.post("/api/video/generations", async (req, res) => {
@@ -205,21 +263,22 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
       return;
     }
 
-    const asset = await uploadToImageHost(req.file);
+    const asset = await uploadToS3(req.file);
 
     res.json({
-      key: asset.src,
+      key: asset.key,
       url: asset.url,
-      src: asset.src,
+      src: asset.key,
       name: normalizeUploadFilename(req.file.originalname),
       size: req.file.size,
       mimeType: req.file.mimetype,
       kind: inferKind(req.file.mimetype),
-      provider: "image-host",
+      provider: "s3",
+      bucket: s3Bucket,
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: error.message || "图床上传失败。" });
+    res.status(error?.code === "LIMIT_FILE_SIZE" ? 413 : 500).json({ error: formatUploadError(error) });
   }
 });
 
@@ -259,6 +318,18 @@ app.get("/styles.css", (_req, res) => {
   res.sendFile(path.join(__dirname, "styles.css"));
 });
 app.use("/assets", express.static(path.join(__dirname, "assets")));
+
+app.use((error, _req, res, next) => {
+  if (!error) {
+    next();
+    return;
+  }
+  if (error?.code === "LIMIT_FILE_SIZE") {
+    res.status(413).json({ error: formatUploadError(error) });
+    return;
+  }
+  next(error);
+});
 
 app.listen(port, () => {
   console.log(`Redith Seedance console running at http://localhost:${port}/`);
