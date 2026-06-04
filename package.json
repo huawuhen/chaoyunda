@@ -11,6 +11,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1057.0",
     "dotenv": "^16.5.0",
     "express": "^4.21.2",
-    "multer": "^2.1.1"
+    "multer": "^2.1.1",
+    "undici": "^6.26.0"
   }
 }

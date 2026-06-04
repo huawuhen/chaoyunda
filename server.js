@@ -7,6 +7,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import dotenv from "dotenv";
 import express from "express";
 import multer from "multer";
+import { Agent } from "undici";
 
 dotenv.config();
 
@@ -20,10 +21,24 @@ const muapiBaseUrl = (process.env.MUAPI_BASE_URL || "https://api.muapi.ai/api/v1
 const s3Endpoint = (process.env.S3_ENDPOINT || "").replace(/\/$/, "");
 const s3Bucket = process.env.S3_BUCKET || "redith-assets";
 const s3Region = process.env.S3_REGION || "us-east-1";
+const s3ForcePathStyle = readBooleanEnv("S3_FORCE_PATH_STYLE", true);
 const s3AccessKeyId = process.env.S3_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID || process.env.access_key_id;
 const s3SecretAccessKey =
   process.env.S3_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY || process.env.secret_access_key;
 const signedUrlExpiresIn = Math.min(Number(process.env.S3_SIGNED_URL_EXPIRES_SECONDS || 604800), 604800);
+const upstreamConnectTimeoutMs = readPositiveInt("UPSTREAM_CONNECT_TIMEOUT_MS", 30000);
+const upstreamRequestTimeoutMs = readPositiveInt("UPSTREAM_REQUEST_TIMEOUT_MS", 60000);
+const upstreamFetchRetries = readNonNegativeInt("UPSTREAM_FETCH_RETRIES", 1);
+const tkhubConnectTimeoutMs = readPositiveInt("TKHUB_CONNECT_TIMEOUT_MS", upstreamConnectTimeoutMs);
+const tkhubRequestTimeoutMs = readPositiveInt("TKHUB_REQUEST_TIMEOUT_MS", upstreamRequestTimeoutMs);
+const tkhubFetchRetries = readNonNegativeInt("TKHUB_FETCH_RETRIES", upstreamFetchRetries);
+const muapiConnectTimeoutMs = readPositiveInt("MUAPI_CONNECT_TIMEOUT_MS", upstreamConnectTimeoutMs);
+const muapiRequestTimeoutMs = readPositiveInt("MUAPI_REQUEST_TIMEOUT_MS", upstreamRequestTimeoutMs);
+const muapiFetchRetries = readNonNegativeInt("MUAPI_FETCH_RETRIES", upstreamFetchRetries);
+const upstreamLogVerbose = process.env.UPSTREAM_LOG_VERBOSE === "1";
+
+const tkhubDispatcher = new Agent({ connect: { timeout: tkhubConnectTimeoutMs } });
+const muapiDispatcher = new Agent({ connect: { timeout: muapiConnectTimeoutMs } });
 
 const requiredEnv = ["TKHUB_API_KEY", "MUAPI_API_KEY", "S3_ENDPOINT"];
 const missingEnv = requiredEnv.filter((key) => !process.env[key]);
@@ -36,7 +51,7 @@ if (missingEnv.length) {
 const s3Client = new S3Client({
   endpoint: s3Endpoint,
   region: s3Region,
-  forcePathStyle: true,
+  forcePathStyle: s3ForcePathStyle,
   credentials: {
     accessKeyId: s3AccessKeyId,
     secretAccessKey: s3SecretAccessKey,
@@ -108,42 +123,144 @@ function missingMuApiKey() {
   return !process.env.MUAPI_API_KEY || process.env.MUAPI_API_KEY.includes("请在这里替换");
 }
 
+function readPositiveInt(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function readNonNegativeInt(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
+function readBooleanEnv(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined) return fallback;
+  return /^(1|true|yes|on)$/i.test(value);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getFetchErrorCode(error) {
+  if (typeof error?.cause?.code === "string") return error.cause.code;
+  if (typeof error?.code === "string") return error.code;
+  return error?.name || "FETCH_FAILED";
+}
+
+function isTimeoutFetchError(error) {
+  const code = getFetchErrorCode(error);
+  return (
+    code === "UND_ERR_CONNECT_TIMEOUT" ||
+    code === "UND_ERR_HEADERS_TIMEOUT" ||
+    code === "UND_ERR_BODY_TIMEOUT" ||
+    code === "AbortError" ||
+    code === "TimeoutError"
+  );
+}
+
+function isRetryableFetchError(error) {
+  const code = getFetchErrorCode(error);
+  return (
+    error?.message === "fetch failed" ||
+    isTimeoutFetchError(error) ||
+    ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN"].includes(code)
+  );
+}
+
+function createUpstreamFetchError(provider, url, error, attempts, timeoutMs) {
+  const code = getFetchErrorCode(error);
+  const host = new URL(url).host;
+  const timedOut = isTimeoutFetchError(error);
+  const status = timedOut ? 504 : 502;
+  const reason = timedOut ? `连接超时，已等待 ${timeoutMs}ms` : "网络请求失败";
+  const message = `${provider} ${reason}：当前服务器无法连接 ${host}。请检查服务器网络、DNS/出口代理，或稍后重试。`;
+  const upstreamError = new Error(message, { cause: error });
+  upstreamError.name = "UpstreamFetchError";
+  upstreamError.status = status;
+  upstreamError.clientMessage = message;
+  upstreamError.code = code;
+  upstreamError.provider = provider;
+  upstreamError.url = url;
+  upstreamError.attempts = attempts;
+  return upstreamError;
+}
+
+async function fetchUpstreamJson(provider, url, options = {}, config) {
+  const attempts = Math.max(config.retries + 1, 1);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        ...options,
+        dispatcher: config.dispatcher,
+        signal: AbortSignal.timeout(config.requestTimeoutMs),
+      });
+      const text = await response.text();
+      let data;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { message: text || `${provider} returned an empty response.` };
+      }
+      return { response, data };
+    } catch (error) {
+      if (!isRetryableFetchError(error) || attempt >= attempts) {
+        throw createUpstreamFetchError(provider, url, error, attempt, config.requestTimeoutMs);
+      }
+      await delay(Math.min(500 * attempt, 1500));
+    }
+  }
+}
+
+function logRouteError(error) {
+  if (error?.name === "UpstreamFetchError") {
+    console.error(
+      `[${error.provider}] ${error.code}: ${error.message} (attempts=${error.attempts}, url=${error.url})`,
+    );
+    if (upstreamLogVerbose) console.error(error.cause || error);
+    return;
+  }
+  console.error(error);
+}
+
+function sendJsonError(res, error, fallback) {
+  const status = Number(error?.status) || 500;
+  const payload = {
+    error: error?.clientMessage || error?.message || fallback,
+  };
+  if (error?.code) payload.code = error.code;
+  res.status(status).json(payload);
+}
+
 async function proxyTkHub(pathname, options = {}) {
-  const response = await fetch(`${tkhubBaseUrl}${pathname}`, {
+  return fetchUpstreamJson("TkHub", `${tkhubBaseUrl}${pathname}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${process.env.TKHUB_API_KEY}`,
       ...(options.headers || {}),
     },
+  }, {
+    dispatcher: tkhubDispatcher,
+    requestTimeoutMs: tkhubRequestTimeoutMs,
+    retries: tkhubFetchRetries,
   });
-  const text = await response.text();
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { message: text || "TkHub returned an empty response." };
-  }
-  return { response, data };
 }
 
 async function proxyMuApi(pathname, options = {}) {
-  const response = await fetch(`${muapiBaseUrl}${pathname}`, {
+  return fetchUpstreamJson("MuAPI", `${muapiBaseUrl}${pathname}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
       "x-api-key": process.env.MUAPI_API_KEY,
       ...(options.headers || {}),
     },
+  }, {
+    dispatcher: muapiDispatcher,
+    requestTimeoutMs: muapiRequestTimeoutMs,
+    retries: muapiFetchRetries,
   });
-  const text = await response.text();
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { message: text || "MuAPI returned an empty response." };
-  }
-  return { response, data };
 }
 
 function stripClientFields(body) {
@@ -223,8 +340,8 @@ app.post("/api/video/generations", async (req, res) => {
     });
     res.status(response.status).json(data);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message || "TkHub 请求失败。" });
+    logRouteError(error);
+    sendJsonError(res, error, "视频生成请求失败。");
   }
 });
 
@@ -251,8 +368,8 @@ app.get("/api/video/generations/:taskId", async (req, res) => {
     });
     res.status(response.status).json(data);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message || "TkHub 查询失败。" });
+    logRouteError(error);
+    sendJsonError(res, error, "视频任务查询失败。");
   }
 });
 

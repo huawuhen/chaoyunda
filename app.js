@@ -5,6 +5,8 @@ const PREVIEW_STRING_LIMIT = 180;
 const HISTORY_KEY = "redith.seedance.history.v1";
 const HISTORY_KEEP = 100;
 const HISTORY_DISPLAY = 50;
+const MIN_DURATION_SECONDS = 4;
+const MAX_DURATION_SECONDS = 15;
 
 const examples = {
   text: {
@@ -16,7 +18,7 @@ const examples = {
     images: [],
     videos: [],
     audios: [],
-    generateAudio: false,
+    generateAudio: true,
   },
   imageText: {
     prompt: "一辆汽车乘风破浪，冲向悉尼歌剧院",
@@ -488,8 +490,12 @@ function setProvider(provider) {
   els.imageBlockLabel.textContent = isMuapiI2v ? "输入图片（必填）" : "参考图片";
   els.generateAudioLabel.textContent = isMuapi ? "生成音频 generate_audio" : "生成或保留音频 metadata.generate_audio";
   els.ratioNote.textContent = isMuapi ? "MuAPI 支持 16:9、9:16、1:1、3:4、4:3、21:9。" : "普通参考模式可能被接口忽略；首尾帧模式支持度更高。";
-  els.duration.min = isMuapi ? "4" : "1";
-  els.duration.max = isMuapi ? "12" : "15";
+  els.duration.min = String(MIN_DURATION_SECONDS);
+  els.duration.max = String(MAX_DURATION_SECONDS);
+  const duration = Number(els.duration.value || MIN_DURATION_SECONDS);
+  if (duration < MIN_DURATION_SECONDS || duration > MAX_DURATION_SECONDS) {
+    els.duration.value = String(Math.min(Math.max(duration, MIN_DURATION_SECONDS), MAX_DURATION_SECONDS));
+  }
   updatePreview();
 }
 
@@ -522,7 +528,7 @@ function buildPayload() {
       model: isI2v ? MUAPI_I2V_MODEL : MUAPI_T2V_MODEL,
       prompt: els.prompt.value.trim(),
       aspect_ratio: els.ratio.value || "16:9",
-      duration: Number(els.duration.value || 5),
+      duration: Number(els.duration.value || MIN_DURATION_SECONDS),
       resolution: els.resolution.value,
       generate_audio: els.generateAudio.checked,
       camera_fixed: els.cameraFixed.checked,
@@ -538,7 +544,7 @@ function buildPayload() {
     provider: "tkhub",
     model: TKHUB_MODEL,
     prompt: els.prompt.value.trim(),
-    duration: Number(els.duration.value || 4),
+    duration: Number(els.duration.value || MIN_DURATION_SECONDS),
     resolution: els.resolution.value,
   };
 
@@ -573,9 +579,9 @@ function buildPayload() {
 function validatePayload(payload) {
   if (!payload.prompt) return "请先填写提示词。";
   if (payload.provider === "muapi-i2v" && !payload.image_url) return "MuAPI 图生视频需要至少提供一张输入图片。";
-  if ((payload.provider === "muapi-i2v" || payload.provider === "muapi-t2v") && (payload.duration < 4 || payload.duration > 12)) return "MuAPI 时长需要在 4-12 秒之间。";
-  if (payload.provider === "muapi-i2v" || payload.provider === "muapi-t2v") return "";
-  if (!payload.duration || payload.duration < 1 || payload.duration > 15) return "时长需要在 1-15 秒之间。";
+  if (!payload.duration || payload.duration < MIN_DURATION_SECONDS || payload.duration > MAX_DURATION_SECONDS) {
+    return `时长需要在 ${MIN_DURATION_SECONDS}-${MAX_DURATION_SECONDS} 秒之间。`;
+  }
   if (payload.metadata?.frame_mode === "first-last") {
     if (!payload.metadata.first_image || !payload.metadata.last_image) return "首尾帧模式需要同时填写首帧和末帧图片 URL。";
   }
@@ -686,7 +692,7 @@ async function submitGeneration() {
   renderResponse(data);
 
   if (!res.ok) {
-    setState(`提交失败 ${res.status}`, "is-error");
+    setState(data.error ? `提交失败 ${res.status}：${data.error}` : `提交失败 ${res.status}`, "is-error");
     return;
   }
 
@@ -718,7 +724,10 @@ async function queryTask(taskId = els.taskId.value.trim(), provider = currentPro
       upsertHistory(makeHistoryRecord(taskId, payload, data));
     }
   }
-  setState(res.ok ? "查询完成" : `查询失败 ${res.status}`, res.ok ? "is-ok" : "is-error");
+  setState(
+    res.ok ? "查询完成" : data.error ? `查询失败 ${res.status}：${data.error}` : `查询失败 ${res.status}`,
+    res.ok ? "is-ok" : "is-error",
+  );
   return data;
 }
 
