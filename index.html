@@ -10,9 +10,14 @@
     <main class="app-shell">
       <section class="workspace">
         <header class="topbar">
-          <div>
+          <div class="brand-block">
             <div class="brand-mark">
               <img src="./assets/logo.png" alt="红手印 Redith" />
+            </div>
+            <div>
+              <p class="eyebrow">Seedance 2.0</p>
+              <h1>AI 视频生成工作台</h1>
+              <p class="subtitle">提交生成、上传参考素材、查看进度与管理结果。</p>
             </div>
           </div>
           <div class="status-pill" id="connectionState">未提交</div>
@@ -49,7 +54,7 @@
               <textarea id="prompt" rows="5" required></textarea>
             </label>
             <div class="asset-tray" id="assetTray">
-              <span>已上传素材</span>
+              <span>素材快捷引用</span>
               <div id="uploadedAssets" class="asset-list">
                 <em>暂无素材</em>
               </div>
@@ -88,41 +93,69 @@
               <button class="tab" type="button" data-mode="first-last">首尾帧</button>
             </div>
 
-            <section class="mode-section" id="regularMode">
-              <div class="field block" id="imageBlock">
-                <span id="imageBlockLabel">参考图片</span>
+            <section class="mode-section asset-input-grid" id="regularMode">
+              <div class="field block asset-input-card" id="imageBlock">
+                <div class="asset-card-head">
+                  <span id="imageBlockLabel">参考图片</span>
+                  <small>用于图生视频、角色或画面参考</small>
+                </div>
                 <div id="imagesList" class="url-list"></div>
                 <button class="inline-button" type="button" data-add="imagesList">添加图片</button>
               </div>
 
-              <div class="field block hidden" id="muapiLastImageBlock">
-                <span>末帧图片（可选）</span>
+              <div class="field block asset-input-card hidden" id="muapiLastImageBlock">
+                <div class="asset-card-head">
+                  <span>末帧图片（可选）</span>
+                  <small>控制镜头结束画面</small>
+                </div>
                 <div id="muapiLastImageList" class="url-list"></div>
                 <button class="inline-button" type="button" data-add="muapiLastImageList">添加末帧图片</button>
               </div>
 
-              <div class="field block" id="videoBlock">
-                <span>参考视频（运动参考）</span>
+              <div class="field block asset-input-card" id="videoBlock">
+                <div class="asset-card-head">
+                  <span>参考视频（运动参考）</span>
+                  <small>用于参考运动、节奏或镜头</small>
+                </div>
                 <div id="videosList" class="url-list"></div>
                 <button class="inline-button" type="button" data-add="videosList">添加视频</button>
               </div>
 
-              <div class="field block" id="audioBlock">
-                <span>参考音频</span>
+              <div class="field block asset-input-card" id="audioBlock">
+                <div class="asset-card-head">
+                  <span>参考音频</span>
+                  <small>用于带音频生成或音色参考</small>
+                </div>
                 <div id="audiosList" class="url-list"></div>
                 <button class="inline-button" type="button" data-add="audiosList">添加音频</button>
               </div>
             </section>
 
-            <section class="mode-section hidden" id="firstLastMode">
-              <label class="field block">
-                <span>首帧图片 URL</span>
+            <section class="mode-section first-last-grid hidden" id="firstLastMode">
+              <div class="field block asset-input-card">
+                <div class="asset-card-head">
+                  <span>首帧图片</span>
+                  <small>输入 URL 或上传图片作为视频开始画面</small>
+                </div>
                 <input id="firstImage" type="url" placeholder="https://example.com/first-frame.jpg" />
-              </label>
-              <label class="field block">
-                <span>末帧图片 URL</span>
+                <label class="file-picker frame-upload">
+                  <input id="firstImageFile" type="file" accept="image/*" />
+                  <span>上传图片</span>
+                </label>
+                <small class="file-meta frame-file-meta" id="firstImageMeta"></small>
+              </div>
+              <div class="field block asset-input-card">
+                <div class="asset-card-head">
+                  <span>末帧图片</span>
+                  <small>输入 URL 或上传图片作为视频结束画面</small>
+                </div>
                 <input id="lastImage" type="url" placeholder="https://example.com/last-frame.jpg" />
-              </label>
+                <label class="file-picker frame-upload">
+                  <input id="lastImageFile" type="file" accept="image/*" />
+                  <span>上传图片</span>
+                </label>
+                <small class="file-meta frame-file-meta" id="lastImageMeta"></small>
+              </div>
             </section>
 
             <div class="options-row">
@@ -170,12 +203,12 @@
         <section class="panel result-panel">
           <div class="panel-heading">
             <div>
-              <h2>任务查询</h2>
-              <p>GET /v1/video/generations/{task_id}</p>
+              <h2>当前任务</h2>
+              <p>提交后自动跟踪进度；普通使用只需关注状态和结果视频。</p>
             </div>
           </div>
 
-          <div class="result-grid">
+          <div class="result-dashboard">
             <div class="result-card">
               <span>任务状态</span>
               <strong id="taskStatus">-</strong>
@@ -185,10 +218,14 @@
               <p id="progressText">等待任务提交</p>
               <p id="actualRatio">实际比例：-</p>
             </div>
-            <div class="query-line">
-              <input id="taskId" placeholder="task_xxx" />
-              <button class="secondary-button" id="queryTask" type="button">查询状态</button>
-            </div>
+            <details class="advanced-query">
+              <summary>手动查询任务 ID</summary>
+              <div class="query-line">
+                <input id="taskId" placeholder="task_xxx" />
+                <button class="secondary-button" id="queryTask" type="button">查询状态</button>
+              </div>
+              <p>用于查询历史任务或自动轮询中断后的任务。</p>
+            </details>
           </div>
         </section>
 
@@ -210,7 +247,7 @@
                   <th>时长</th>
                   <th>分辨率</th>
                   <th>状态</th>
-                  <th>视频地址</th>
+                  <th>结果视频</th>
                   <th>操作</th>
                 </tr>
               </thead>

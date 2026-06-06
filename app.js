@@ -178,6 +178,10 @@ const els = {
   actualRatio: $("#actualRatio"),
   firstImage: $("#firstImage"),
   lastImage: $("#lastImage"),
+  firstImageFile: $("#firstImageFile"),
+  lastImageFile: $("#lastImageFile"),
+  firstImageMeta: $("#firstImageMeta"),
+  lastImageMeta: $("#lastImageMeta"),
   modeTabs: $("#modeTabs"),
   regularMode: $("#regularMode"),
   firstLastMode: $("#firstLastMode"),
@@ -300,6 +304,24 @@ function downloadUrl(videoUrl) {
   return `/api/download?url=${encodeURIComponent(videoUrl)}`;
 }
 
+function compactVideoUrl(videoUrl) {
+  try {
+    const url = new URL(videoUrl);
+    const path = url.pathname.length > 24 ? `${url.pathname.slice(0, 24)}...` : url.pathname;
+    return `${url.host}${path}`;
+  } catch {
+    return videoUrl.length > 36 ? `${videoUrl.slice(0, 36)}...` : videoUrl;
+  }
+}
+
+function historyStatusClass(status) {
+  const value = String(status || "").toLowerCase();
+  if (/success|succeeded|completed|complete|done|finish|finished|完成|成功/.test(value)) return "is-ok";
+  if (/fail|failed|error|cancel|canceled|cancelled|失败|错误|取消/.test(value)) return "is-error";
+  if (/pending|queue|queued|running|processing|progress|generat|等待|排队|处理中|生成/.test(value)) return "is-busy";
+  return "";
+}
+
 function renderHistory() {
   const rows = taskHistory.slice(0, HISTORY_DISPLAY);
   if (!rows.length) {
@@ -310,18 +332,20 @@ function renderHistory() {
     .map((record) => {
       const hasVideo = Boolean(record.videoUrl);
       const videoCell = hasVideo
-        ? `<a href="${escapeHtml(record.videoUrl)}" target="_blank" rel="noreferrer">${escapeHtml(record.videoUrl)}</a>`
-        : "暂无结果";
+        ? `<a class="history-video-link" href="${escapeHtml(record.videoUrl)}" target="_blank" rel="noreferrer">查看结果视频</a><span class="history-url-preview" title="${escapeHtml(record.videoUrl)}">${escapeHtml(compactVideoUrl(record.videoUrl))}</span>`
+        : '<span class="history-url-preview">等待生成结果</span>';
       const actions = hasVideo
         ? `<a href="${escapeHtml(record.videoUrl)}" target="_blank" rel="noreferrer">打开</a><a href="${escapeHtml(downloadUrl(record.videoUrl))}">下载</a>`
         : `<button type="button" data-query-history="${escapeHtml(record.taskId)}" data-provider="${escapeHtml(record.provider || "tkhub")}">查询</button>`;
+      const status = record.status || "-";
+      const statusClass = historyStatusClass(status);
       return `<tr>
         <td>${escapeHtml(formatTime(record.requestedAt))}</td>
         <td class="mono">${escapeHtml(record.taskId)}</td>
         <td>${escapeHtml(effectiveRatio(record))}</td>
         <td>${escapeHtml(record.duration)}</td>
         <td>${escapeHtml(record.resolution)}</td>
-        <td>${escapeHtml(record.status || "-")}</td>
+        <td><span class="history-status ${escapeHtml(statusClass)}">${escapeHtml(status)}</span></td>
         <td class="url-cell">${videoCell}</td>
         <td><div class="history-actions">${actions}</div></td>
       </tr>`;
@@ -450,6 +474,34 @@ function addUrlRow(listId, value = "") {
   $(`#${listId}`).appendChild(row);
 }
 
+function bindFrameImageUpload(fileInput, targetInput, meta, uploadTarget) {
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    if (file.type && !file.type.startsWith("image/")) {
+      meta.textContent = "请选择图片文件。";
+      setState("请选择图片文件", "is-error");
+      fileInput.value = "";
+      return;
+    }
+
+    meta.textContent = `正在上传 ${file.name}`;
+    try {
+      const asset = await uploadFileToStorage(file, uploadTarget);
+      targetInput.value = asset.url;
+      meta.textContent = `${asset.name} · ${formatBytes(asset.size)} · 已上传为图片 URL`;
+      rememberUploadedAsset(asset);
+      updatePreview();
+    } catch (error) {
+      meta.textContent = `上传失败：${error.message}`;
+      setState(error.message, "is-error");
+      updatePreview();
+    } finally {
+      fileInput.value = "";
+    }
+  });
+}
+
 function setList(listId, values = []) {
   $(`#${listId}`).innerHTML = "";
   values.forEach((value) => addUrlRow(listId, value));
@@ -510,6 +562,8 @@ function applyExample(name) {
   els.cameraFixed.checked = Boolean(example.cameraFixed);
   els.firstImage.value = example.firstImage || "";
   els.lastImage.value = example.lastImage || "";
+  els.firstImageMeta.textContent = "";
+  els.lastImageMeta.textContent = "";
   setList("imagesList", example.images);
   setList("videosList", example.videos);
   setList("audiosList", example.audios);
@@ -764,6 +818,9 @@ document.querySelectorAll("[data-add]").forEach((button) => {
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => setMode(tab.dataset.mode));
 });
+
+bindFrameImageUpload(els.firstImageFile, els.firstImage, els.firstImageMeta, "firstImage");
+bindFrameImageUpload(els.lastImageFile, els.lastImage, els.lastImageMeta, "lastImage");
 
 els.preset.addEventListener("change", () => applyExample(els.preset.value));
 
