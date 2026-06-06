@@ -172,6 +172,7 @@ const els = {
   resetForm: $("#resetForm"),
   clearHistory: $("#clearHistory"),
   historyBody: $("#historyBody"),
+  historyCount: $("#historyCount"),
   taskStatus: $("#taskStatus"),
   progressBar: $("#progressBar"),
   progressText: $("#progressText"),
@@ -324,8 +325,9 @@ function historyStatusClass(status) {
 
 function renderHistory() {
   const rows = taskHistory.slice(0, HISTORY_DISPLAY);
+  if (els.historyCount) els.historyCount.textContent = String(rows.length);
   if (!rows.length) {
-    els.historyBody.innerHTML = '<tr><td colspan="8" class="empty-history">暂无生成记录</td></tr>';
+    els.historyBody.innerHTML = '<div class="history-empty">暂无生成记录</div>';
     return;
   }
   els.historyBody.innerHTML = rows
@@ -339,16 +341,20 @@ function renderHistory() {
         : `<button type="button" data-query-history="${escapeHtml(record.taskId)}" data-provider="${escapeHtml(record.provider || "tkhub")}">查询</button>`;
       const status = record.status || "-";
       const statusClass = historyStatusClass(status);
-      return `<tr>
-        <td>${escapeHtml(formatTime(record.requestedAt))}</td>
-        <td class="mono">${escapeHtml(record.taskId)}</td>
-        <td>${escapeHtml(effectiveRatio(record))}</td>
-        <td>${escapeHtml(record.duration)}</td>
-        <td>${escapeHtml(record.resolution)}</td>
-        <td><span class="history-status ${escapeHtml(statusClass)}">${escapeHtml(status)}</span></td>
-        <td class="url-cell">${videoCell}</td>
-        <td><div class="history-actions">${actions}</div></td>
-      </tr>`;
+      return `<article class="history-record">
+        <div class="history-record-head">
+          <span class="history-record-time">${escapeHtml(formatTime(record.requestedAt))}</span>
+          <span class="history-status ${escapeHtml(statusClass)}">${escapeHtml(status)}</span>
+        </div>
+        <div class="history-record-id" title="${escapeHtml(record.taskId)}">${escapeHtml(record.taskId)}</div>
+        <div class="history-record-meta">
+          <span>${escapeHtml(effectiveRatio(record))}</span>
+          <span>${escapeHtml(record.duration)}</span>
+          <span>${escapeHtml(record.resolution)}</span>
+        </div>
+        <div>${videoCell}</div>
+        <div class="history-actions">${actions}</div>
+      </article>`;
     })
     .join("");
 }
@@ -713,6 +719,10 @@ function renderResponse(data) {
   if (videoUrl) {
     els.previewVideo.src = videoUrl;
     els.previewVideo.style.display = "block";
+    els.previewVideo.style.width = "100%";
+    els.previewVideo.style.height = "100%";
+    els.previewVideo.style.objectFit = "contain";
+    els.previewVideo.style.objectPosition = "center center";
     els.previewEmpty.style.display = "none";
     els.previewOpenLink.href = videoUrl;
     els.previewDownloadLink.href = downloadUrl(videoUrl);
