@@ -47,9 +47,10 @@
               <label class="mini-field">
                 <span>接口</span>
                 <select id="provider">
-                  <option value="tkhub">TkHub Seedance 2.0</option>
-                  <option value="muapi-i2v">MuAPI| Seedance2 I2V</option>
-                  <option value="muapi-t2v">MuAPI| Seedance2 T2V</option>
+                  <option value="tkhub">TkHub Seedance 2.0 全参</option>
+                  <option value="muapi-i2v">MuAPI| Seedance-fast 图文生</option>
+                  <option value="muapi-t2v">MuAPI| Seedance-fast 文生</option>
+                  <option value="muapi-gemini-omni-i2v">MuAPI| Gemini Omni 图文生</option>
                 </select>
               </label>
               <label class="mini-field">
@@ -63,6 +64,7 @@
                   <option value="firstLast">案例 E 首尾帧</option>
                   <option value="muapiI2v">MuAPI 图生视频</option>
                   <option value="muapiT2v">MuAPI 文生视频</option>
+                  <option value="muapiGeminiOmni">MuAPI Gemini Omni 图生视频</option>
                 </select>
               </label>
             </div>
@@ -92,7 +94,7 @@
                 <button class="inline-button" type="button" data-add="imagesList">上传 / URL</button>
               </div>
               <div id="imagesList" class="url-list"></div>
-              <p class="upload-empty">暂无参考图，最多 9 张</p>
+              <p class="upload-empty" id="imageBlockEmpty">暂无参考图，最多 9 张</p>
             </div>
 
             <div class="upload-block hidden" id="muapiLastImageBlock">
@@ -157,6 +159,7 @@
                   <option value="720p">720p</option>
                   <option value="480p">480p</option>
                   <option value="1080p">1080p</option>
+                  <option value="4k">4K</option>
                 </select>
               </label>
               <label class="param-card">
@@ -177,10 +180,27 @@
                 <input id="duration" type="number" min="4" max="15" step="1" value="4" />
               </label>
             </div>
+            <div class="parameter-grid hidden" id="geminiOptionsBlock">
+              <label class="param-card">
+                <span>音频 ID（可选）</span>
+                <input id="geminiAudioIds" placeholder="最多 3 个，用逗号分隔" />
+                <small class="field-note">Gemini Omni Audio 返回的 voice profile ID。</small>
+              </label>
+              <label class="param-card">
+                <span>角色 ID（可选）</span>
+                <input id="geminiCharacterIds" placeholder="最多 3 个，用逗号分隔" />
+                <small class="field-note">Gemini Omni Character 返回的 character ID。</small>
+              </label>
+              <label class="param-card">
+                <span>Seed（可选）</span>
+                <input id="geminiSeed" type="number" min="0" max="2147483647" step="1" placeholder="0-2147483647" />
+                <small class="field-note">留空则由模型随机生成。</small>
+              </label>
+            </div>
           </section>
 
           <div class="options-row">
-            <label class="check-field">
+            <label class="check-field" id="generateAudioField">
               <input id="generateAudio" type="checkbox" checked />
               <span id="generateAudioLabel">生成或保留音频 metadata.generate_audio</span>
             </label>

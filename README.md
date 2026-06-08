@@ -6,7 +6,7 @@ Redith Seedance Console is a lightweight Node.js + Express web app for video gen
 
 - Static web console served by Express
 - Video generation API proxy for TkHub
-- Text-to-video and image-to-video API proxy for MuAPI
+- Text-to-video and image-to-video API proxy for MuAPI Seedance and Gemini Omni models
 - Upload endpoint for image/video/audio assets backed by S3-compatible storage
 - Download proxy for generated videos
 - Docker Compose deployment support
@@ -72,6 +72,18 @@ http://localhost:4173
 ```
 
 If you set a different `PORT` in `.env`, use that port instead.
+
+## MuAPI Model Notes
+
+The console currently supports these MuAPI providers from the interface selector:
+
+| UI provider | MuAPI endpoint | Required media field | Notes |
+| --- | --- | --- | --- |
+| `MuAPI| Seedance2 I2V` | `/api/v1/seedance-v1.5-pro-i2v` | `image_url` | Supports optional last frame, `generate_audio`, and `camera_fixed`. |
+| `MuAPI| Seedance2 T2V` | `/api/v1/seedance-v1.5-pro-t2v` | None | Text-to-video through the same async prediction flow. |
+| `MuAPI| Gemini Omni I2V` | `/api/v1/gemini-omni-image-to-video` | `image_urls` | Image-to-video, requires prompt and 1-5 images, duration must be `4`, `6`, `8`, or `10`, resolution is `720p`, `1080p`, or `4k`, and aspect ratio is `16:9` or `9:16`. Optional `audio_ids`, `character_ids`, and `seed` are supported. |
+
+All MuAPI submissions return a `request_id`; the app polls `/api/v1/predictions/{request_id}/result` through its local proxy.
 
 ## Docker Compose Deployment
 

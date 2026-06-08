@@ -39,6 +39,11 @@ const upstreamLogVerbose = process.env.UPSTREAM_LOG_VERBOSE === "1";
 
 const tkhubDispatcher = new Agent({ connect: { timeout: tkhubConnectTimeoutMs } });
 const muapiDispatcher = new Agent({ connect: { timeout: muapiConnectTimeoutMs } });
+const muapiProviderEndpoints = {
+  "muapi-i2v": "/seedance-v1.5-pro-i2v",
+  "muapi-t2v": "/seedance-v1.5-pro-t2v",
+  "muapi-gemini-omni-i2v": "/gemini-omni-image-to-video",
+};
 
 const requiredEnv = ["TKHUB_API_KEY", "MUAPI_API_KEY", "S3_ENDPOINT"];
 const missingEnv = requiredEnv.filter((key) => !process.env[key]);
@@ -273,6 +278,10 @@ function stripProviderField(body) {
   return payload;
 }
 
+function getMuApiEndpoint(provider) {
+  return muapiProviderEndpoints[provider] || "";
+}
+
 async function ensureS3Bucket() {
   if (!ensureBucketPromise) {
     ensureBucketPromise = (async () => {
@@ -316,13 +325,13 @@ async function uploadToS3(file) {
 
 app.post("/api/video/generations", async (req, res) => {
   try {
-    if (req.body?.provider === "muapi-i2v" || req.body?.provider === "muapi-t2v") {
+    const muapiEndpoint = getMuApiEndpoint(req.body?.provider);
+    if (muapiEndpoint) {
       if (missingMuApiKey()) {
         res.status(500).json({ error: "请先在 .env 中配置 MUAPI_API_KEY，然后重启本地服务。" });
         return;
       }
-      const endpoint = req.body.provider === "muapi-t2v" ? "/seedance-v1.5-pro-t2v" : "/seedance-v1.5-pro-i2v";
-      const { response, data } = await proxyMuApi(endpoint, {
+      const { response, data } = await proxyMuApi(muapiEndpoint, {
         method: "POST",
         body: JSON.stringify(stripClientFields(req.body)),
       });
@@ -347,7 +356,7 @@ app.post("/api/video/generations", async (req, res) => {
 
 app.get("/api/video/generations/:taskId", async (req, res) => {
   try {
-    if (req.query.provider === "muapi-i2v" || req.query.provider === "muapi-t2v") {
+    if (getMuApiEndpoint(req.query.provider)) {
       if (missingMuApiKey()) {
         res.status(500).json({ error: "请先在 .env 中配置 MUAPI_API_KEY，然后重启本地服务。" });
         return;

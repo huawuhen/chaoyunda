@@ -1,12 +1,14 @@
 const TKHUB_MODEL = "bytedance/seedance-2.0";
 const MUAPI_I2V_MODEL = "seedance-v1.5-pro-i2v";
 const MUAPI_T2V_MODEL = "seedance-v1.5-pro-t2v";
+const MUAPI_GEMINI_OMNI_MODEL = "gemini-omni-image-to-video";
 const PREVIEW_STRING_LIMIT = 180;
 const HISTORY_KEY = "redith.seedance.history.v1";
 const HISTORY_KEEP = 100;
 const HISTORY_DISPLAY = 50;
 const MIN_DURATION_SECONDS = 4;
 const MAX_DURATION_SECONDS = 15;
+const GEMINI_OMNI_DURATIONS = [4, 6, 8, 10];
 
 const examples = {
   text: {
@@ -113,6 +115,24 @@ const examples = {
     generateAudio: true,
     cameraFixed: false,
   },
+  muapiGeminiOmni: {
+    provider: "muapi-gemini-omni-i2v",
+    prompt:
+      "The subject slowly turns to face the camera as golden-hour light sweeps across the scene, leaves rustling in the breeze, synchronized ambient sound and cinematic camera motion.",
+    duration: 8,
+    resolution: "1080p",
+    ratio: "16:9",
+    mode: "regular",
+    images: ["https://d3adwkbyhxyrtq.cloudfront.net/webassets/videomodels/seedance-v1.5-pro-i2v.jpg"],
+    videos: [],
+    audios: [],
+    lastImages: [],
+    generateAudio: false,
+    cameraFixed: false,
+    audioIds: "",
+    characterIds: "",
+    seed: "",
+  },
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -154,6 +174,11 @@ const els = {
   resolution: $("#resolution"),
   ratio: $("#ratio"),
   ratioNote: $("#ratioNote"),
+  geminiOptionsBlock: $("#geminiOptionsBlock"),
+  geminiAudioIds: $("#geminiAudioIds"),
+  geminiCharacterIds: $("#geminiCharacterIds"),
+  geminiSeed: $("#geminiSeed"),
+  generateAudioField: $("#generateAudioField"),
   generateAudio: $("#generateAudio"),
   generateAudioLabel: $("#generateAudioLabel"),
   cameraFixed: $("#cameraFixed"),
@@ -188,6 +213,7 @@ const els = {
   firstLastMode: $("#firstLastMode"),
   imageBlock: $("#imageBlock"),
   imageBlockLabel: $("#imageBlockLabel"),
+  imageBlockEmpty: $("#imageBlockEmpty"),
   videoBlock: $("#videoBlock"),
   audioBlock: $("#audioBlock"),
   muapiLastImageBlock: $("#muapiLastImageBlock"),
@@ -197,6 +223,53 @@ let currentMode = "regular";
 let pollTimer = null;
 let uploadedAssets = [];
 let taskHistory = loadHistory();
+
+function isMuApiSeedanceI2v(provider = currentProvider()) {
+  return provider === "muapi-i2v";
+}
+
+function isMuApiSeedanceT2v(provider = currentProvider()) {
+  return provider === "muapi-t2v";
+}
+
+function isMuApiGeminiOmniI2v(provider = currentProvider()) {
+  return provider === "muapi-gemini-omni-i2v";
+}
+
+function isMuApiProvider(provider = currentProvider()) {
+  return isMuApiSeedanceI2v(provider) || isMuApiSeedanceT2v(provider) || isMuApiGeminiOmniI2v(provider);
+}
+
+function providerDurationMax(provider = currentProvider()) {
+  return isMuApiGeminiOmniI2v(provider) ? Math.max(...GEMINI_OMNI_DURATIONS) : MAX_DURATION_SECONDS;
+}
+
+function updateRatioOptions(provider = currentProvider()) {
+  const isGeminiOmni = isMuApiGeminiOmniI2v(provider);
+  const disabledValues = isGeminiOmni ? ["", "1:1", "4:3", "3:4", "21:9"] : [];
+  els.ratio.querySelectorAll("option").forEach((option) => {
+    option.disabled = disabledValues.includes(option.value);
+  });
+  if (els.ratio.selectedOptions[0]?.disabled) {
+    els.ratio.value = isGeminiOmni ? "16:9" : "";
+  }
+}
+
+function updateResolutionOptions(provider = currentProvider()) {
+  const isGeminiOmni = isMuApiGeminiOmniI2v(provider);
+  const option480p = els.resolution.querySelector('option[value="480p"]');
+  const option1080p = els.resolution.querySelector('option[value="1080p"]');
+  const option4k = els.resolution.querySelector('option[value="4k"]');
+  if (option480p) option480p.disabled = isGeminiOmni;
+  if (option1080p) option1080p.disabled = false;
+  if (option4k) option4k.disabled = !isGeminiOmni;
+  if (isGeminiOmni && els.resolution.value === "480p") {
+    els.resolution.value = "1080p";
+  }
+  if (!isGeminiOmni && els.resolution.value === "4k") {
+    els.resolution.value = "720p";
+  }
+}
 
 function formatBytes(bytes) {
   if (!bytes) return "0 B";
@@ -425,6 +498,24 @@ function getUrls(listId) {
     .filter(Boolean);
 }
 
+function splitIdList(value = "") {
+  return value
+    .split(/[\n,，\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function imageUploadLimit(provider = currentProvider()) {
+  return isMuApiGeminiOmniI2v(provider) ? 5 : 9;
+}
+
+function listLimit(listId) {
+  if (listId === "imagesList") return imageUploadLimit();
+  if (listId === "videosList") return 3;
+  return 0;
+}
+
 function getAcceptForList(listId) {
   if (listId === "imagesList" || listId === "muapiLastImageList") return "image/*";
   if (listId === "videosList") return "video/*";
@@ -437,6 +528,13 @@ function getDimensions(resolution, ratio) {
 }
 
 function addUrlRow(listId, value = "") {
+  const limit = listLimit(listId);
+  const currentRows = document.querySelectorAll(`#${listId} .url-row`).length;
+  if (limit && currentRows >= limit) {
+    setState(`${listId === "imagesList" ? "参考图" : "参考视频"}最多只能添加 ${limit} 个。`, "is-error");
+    return;
+  }
+
   const template = $("#urlRowTemplate");
   const row = template.content.firstElementChild.cloneNode(true);
   const sourceInput = row.querySelector(".source-value");
@@ -529,14 +627,19 @@ function currentProvider() {
 
 function setProvider(provider) {
   els.provider.value = provider;
-  const isMuapiI2v = provider === "muapi-i2v";
-  const isMuapiT2v = provider === "muapi-t2v";
-  const isMuapi = isMuapiI2v || isMuapiT2v;
+  const isMuapiI2v = isMuApiSeedanceI2v(provider);
+  const isMuapiT2v = isMuApiSeedanceT2v(provider);
+  const isGeminiOmniI2v = isMuApiGeminiOmniI2v(provider);
+  const isMuapi = isMuApiProvider(provider);
+  updateRatioOptions(provider);
+  updateResolutionOptions(provider);
   els.endpointHint.textContent = isMuapiI2v
     ? "提交到 POST /api/v1/seedance-v1.5-pro-i2v"
     : isMuapiT2v
       ? "提交到 POST /api/v1/seedance-v1.5-pro-t2v"
-      : "提交到 POST /v1/video/generations";
+      : isGeminiOmniI2v
+        ? "提交到 POST /api/v1/gemini-omni-image-to-video"
+        : "提交到 POST /v1/video/generations";
   els.modeTabs.classList.toggle("hidden", isMuapi);
   els.firstLastMode.classList.toggle("hidden", isMuapi || currentMode !== "first-last");
   els.regularMode.classList.toggle("hidden", !isMuapi && currentMode !== "regular");
@@ -544,15 +647,25 @@ function setProvider(provider) {
   els.audioBlock.classList.toggle("hidden", isMuapi);
   els.muapiLastImageBlock.classList.toggle("hidden", !isMuapiI2v);
   els.imageBlock.classList.toggle("hidden", isMuapiT2v);
-  els.cameraFixedField.classList.toggle("hidden", !isMuapi);
-  els.imageBlockLabel.textContent = isMuapiI2v ? "输入图片（必填）" : "参考图片";
+  els.cameraFixedField.classList.toggle("hidden", !isMuapi || isGeminiOmniI2v);
+  els.generateAudioField.classList.toggle("hidden", isGeminiOmniI2v);
+  els.geminiOptionsBlock.classList.toggle("hidden", !isGeminiOmniI2v);
+  els.prompt.required = true;
+  els.imageBlockLabel.textContent = isMuapiI2v || isGeminiOmniI2v ? "输入图片（必填）" : "参考图片";
+  els.imageBlockEmpty.textContent = `暂无参考图，最多 ${imageUploadLimit(provider)} 张`;
   els.generateAudioLabel.textContent = isMuapi ? "生成音频 generate_audio" : "生成或保留音频 metadata.generate_audio";
-  els.ratioNote.textContent = isMuapi ? "MuAPI 支持 16:9、9:16、1:1、3:4、4:3、21:9。" : "普通参考模式可能被接口忽略；首尾帧模式支持度更高。";
+  els.ratioNote.textContent = isGeminiOmniI2v
+    ? "Gemini Omni 只支持 16:9、9:16。"
+    : isMuapi
+      ? "MuAPI Seedance 支持 16:9、9:16、1:1、3:4、4:3、21:9。"
+      : "普通参考模式可能被接口忽略；首尾帧模式支持度更高。";
   els.duration.min = String(MIN_DURATION_SECONDS);
-  els.duration.max = String(MAX_DURATION_SECONDS);
+  els.duration.max = String(providerDurationMax(provider));
   const duration = Number(els.duration.value || MIN_DURATION_SECONDS);
-  if (duration < MIN_DURATION_SECONDS || duration > MAX_DURATION_SECONDS) {
-    els.duration.value = String(Math.min(Math.max(duration, MIN_DURATION_SECONDS), MAX_DURATION_SECONDS));
+  if (isGeminiOmniI2v && !GEMINI_OMNI_DURATIONS.includes(duration)) {
+    els.duration.value = String(examples.muapiGeminiOmni.duration);
+  } else if (duration < MIN_DURATION_SECONDS || duration > providerDurationMax(provider)) {
+    els.duration.value = String(Math.min(Math.max(duration, MIN_DURATION_SECONDS), providerDurationMax(provider)));
   }
   updatePreview();
 }
@@ -566,6 +679,9 @@ function applyExample(name) {
   els.ratio.value = example.ratio || "";
   els.generateAudio.checked = Boolean(example.generateAudio);
   els.cameraFixed.checked = Boolean(example.cameraFixed);
+  els.geminiAudioIds.value = example.audioIds || "";
+  els.geminiCharacterIds.value = example.characterIds || "";
+  els.geminiSeed.value = example.seed || "";
   els.firstImage.value = example.firstImage || "";
   els.lastImage.value = example.lastImage || "";
   els.firstImageMeta.textContent = "";
@@ -579,12 +695,32 @@ function applyExample(name) {
 }
 
 function buildPayload() {
-  if (currentProvider() === "muapi-i2v" || currentProvider() === "muapi-t2v") {
-    const isI2v = currentProvider() === "muapi-i2v";
+  const provider = currentProvider();
+  if (isMuApiGeminiOmniI2v(provider)) {
+    const payload = {
+      provider,
+      model: MUAPI_GEMINI_OMNI_MODEL,
+      prompt: els.prompt.value.trim(),
+      image_urls: getUrls("imagesList"),
+      aspect_ratio: els.ratio.value || "16:9",
+      duration: Number(els.duration.value || examples.muapiGeminiOmni.duration),
+      resolution: els.resolution.value,
+    };
+    const audioIds = splitIdList(els.geminiAudioIds.value);
+    const characterIds = splitIdList(els.geminiCharacterIds.value);
+    const seed = els.geminiSeed.value.trim();
+    if (audioIds.length) payload.audio_ids = audioIds;
+    if (characterIds.length) payload.character_ids = characterIds;
+    if (seed) payload.seed = Number(seed);
+    return payload;
+  }
+
+  if (isMuApiSeedanceI2v(provider) || isMuApiSeedanceT2v(provider)) {
+    const isI2v = isMuApiSeedanceI2v(provider);
     const imageUrl = getUrls("imagesList")[0] || "";
     const lastImage = getUrls("muapiLastImageList")[0] || "";
     const payload = {
-      provider: currentProvider(),
+      provider,
       model: isI2v ? MUAPI_I2V_MODEL : MUAPI_T2V_MODEL,
       prompt: els.prompt.value.trim(),
       aspect_ratio: els.ratio.value || "16:9",
@@ -601,7 +737,7 @@ function buildPayload() {
   }
 
   const payload = {
-    provider: "tkhub",
+    provider,
     model: TKHUB_MODEL,
     prompt: els.prompt.value.trim(),
     duration: Number(els.duration.value || MIN_DURATION_SECONDS),
@@ -639,6 +775,17 @@ function buildPayload() {
 function validatePayload(payload) {
   if (!payload.prompt) return "请先填写提示词。";
   if (payload.provider === "muapi-i2v" && !payload.image_url) return "MuAPI 图生视频需要至少提供一张输入图片。";
+  if (payload.provider === "muapi-gemini-omni-i2v") {
+    if (!payload.image_urls?.length) return "Gemini Omni 图生视频需要至少提供一张输入图片。";
+    if (payload.image_urls.length > 5) return "Gemini Omni 最多支持 5 张参考图。";
+    if (!GEMINI_OMNI_DURATIONS.includes(payload.duration)) return "Gemini Omni 秒数只能是 4、6、8、10。";
+    if (!["720p", "1080p", "4k"].includes(payload.resolution)) return "Gemini Omni 清晰度只能是 720p、1080p、4k。";
+    if (!["16:9", "9:16"].includes(payload.aspect_ratio)) return "Gemini Omni 画面比例只能是 16:9 或 9:16。";
+    if (payload.seed !== undefined && (!Number.isInteger(payload.seed) || payload.seed < 0 || payload.seed > 2147483647)) {
+      return "Gemini Omni seed 需要是 0-2147483647 之间的整数。";
+    }
+    return "";
+  }
   if (!payload.duration || payload.duration < MIN_DURATION_SECONDS || payload.duration > MAX_DURATION_SECONDS) {
     return `时长需要在 ${MIN_DURATION_SECONDS}-${MAX_DURATION_SECONDS} 秒之间。`;
   }
@@ -671,8 +818,42 @@ function endpoint(path = "") {
   return path;
 }
 
+function firstString(...values) {
+  return values.find((value) => typeof value === "string" && value.trim())?.trim() || "";
+}
+
+function formatApiError(data, fallback = "") {
+  const raw =
+    data?.error ||
+    data?.detail ||
+    data?.message ||
+    data?.msg ||
+    data?.data?.error ||
+    data?.data?.detail ||
+    data?.data?.message ||
+    data?.data?.msg ||
+    fallback;
+  if (Array.isArray(raw) || (raw && typeof raw === "object")) {
+    return JSON.stringify(raw);
+  }
+  return String(raw || fallback);
+}
+
 function getTaskId(data) {
-  return data?.request_id || data?.task_id || data?.id || data?.data?.request_id || data?.data?.task_id || "";
+  return firstString(
+    data?.request_id,
+    data?.data?.request_id,
+    data?.taskId,
+    data?.data?.taskId,
+    data?.task_id,
+    data?.data?.task_id,
+    data?.id,
+    data?.data?.id,
+  );
+}
+
+function looksInvalidMuApiTaskId(taskId, provider) {
+  return isMuApiProvider(provider) && (taskId === "-" || /^\d+$/.test(taskId));
 }
 
 function getProgress(data) {
@@ -692,8 +873,11 @@ function getVideoUrl(data) {
     data?.video ||
     data?.result_url ||
     data?.output?.video ||
+    data?.data?.output?.video ||
     data?.output?.outputs?.[0] ||
+    data?.data?.output?.outputs?.[0] ||
     data?.output?.urls?.get ||
+    data?.data?.output?.urls?.get ||
     data?.outputs?.[0] ||
     data?.data?.result_url ||
     data?.data?.content?.video_url ||
@@ -756,7 +940,8 @@ async function submitGeneration() {
   renderResponse(data);
 
   if (!res.ok) {
-    setState(data.error ? `提交失败 ${res.status}：${data.error}` : `提交失败 ${res.status}`, "is-error");
+    const message = formatApiError(data);
+    setState(message ? `提交失败 ${res.status}：${message}` : `提交失败 ${res.status}`, "is-error");
     return;
   }
 
@@ -770,6 +955,10 @@ async function submitGeneration() {
 async function queryTask(taskId = els.taskId.value.trim(), provider = currentProvider()) {
   if (!taskId) {
     setState("请填写 task_id", "is-error");
+    return null;
+  }
+  if (looksInvalidMuApiTaskId(taskId, provider)) {
+    setState("当前任务 ID 不像 MuAPI request_id，请重新提交任务，或手动填写提交接口返回的真实 request_id。", "is-error");
     return null;
   }
   setState("正在查询", "is-busy");
@@ -788,8 +977,11 @@ async function queryTask(taskId = els.taskId.value.trim(), provider = currentPro
       upsertHistory(makeHistoryRecord(taskId, payload, data));
     }
   }
+  data.__ok = res.ok;
+  data.__httpStatus = res.status;
+  const message = formatApiError(data);
   setState(
-    res.ok ? "查询完成" : data.error ? `查询失败 ${res.status}：${data.error}` : `查询失败 ${res.status}`,
+    res.ok ? "查询完成" : message ? `查询失败 ${res.status}：${message}` : `查询失败 ${res.status}`,
     res.ok ? "is-ok" : "is-error",
   );
   return data;
@@ -799,6 +991,11 @@ function startPolling(taskId, provider = currentProvider()) {
   clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     const data = await queryTask(taskId, provider);
+    if (data && data.__ok === false) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      return;
+    }
     const status = String(getStatus(data)).toUpperCase();
     if (["SUCCESS", "SUCCEEDED", "COMPLETED", "FAILED", "ERROR"].includes(status) || getVideoUrl(data)) {
       clearInterval(pollTimer);
@@ -836,10 +1033,14 @@ els.preset.addEventListener("change", () => applyExample(els.preset.value));
 
 els.provider.addEventListener("change", () => {
   setProvider(currentProvider());
-  if (currentProvider() === "muapi-i2v" && !getUrls("imagesList").length) {
+  if (isMuApiSeedanceI2v() && !getUrls("imagesList").length) {
     setList("imagesList", examples.muapiI2v.images);
   }
-  if (currentProvider() === "muapi-t2v") {
+  if (isMuApiGeminiOmniI2v()) {
+    if (!getUrls("imagesList").length) setList("imagesList", examples.muapiGeminiOmni.images);
+    setList("muapiLastImageList", []);
+  }
+  if (isMuApiSeedanceT2v()) {
     setList("imagesList", []);
     setList("muapiLastImageList", []);
   }
